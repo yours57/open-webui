@@ -1,0 +1,86 @@
+name: Sync and Deploy
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 0 * * *" # daily at midnight
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: Sync latest commits from upstream repo
+    runs-on: ubuntu-latest
+    if: ${{ github.event.repository.fork }}
+    outputs:
+      changes: ${{ steps.check_changes.outputs.changes }}
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v3
+      - name: Sync upstream changes
+        id: sync
+        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
+        with:
+          upstream_sync_repo: open-webui/open-webui
+          upstream_sync_branch: main
+          target_sync_branch: main
+          target_repo_token: ${{ secrets.GITHUB_TOKEN }}
+          test_mode: false
+      - name: Check if there were changes
+        id: check_changes
+        run: |
+          if [[ ${{ steps.sync.outputs.has_new_commits }} == "true" ]]; then
+            echo "changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "changes=false" >> $GITHUB_OUTPUT
+          fi
+
+  deploy:
+    needs: sync
+    if: |
+      always() &&
+      (needs.sync.result == 'success' || needs.sync.result == 'skipped') &&
+      (github.event_name == 'push' || (github.event_name == 'schedule' && needs.sync.outputs.changes == 'true') || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Check for HF_TOKEN
+        id: check_token
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [[ -n "$HF_TOKEN" ]]; then
+            echo "token_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "token_exists=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Deploy to HuggingFace Spaces
+        if: steps.check_token.outputs.token_exists == 'true'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          # Remove git history
+          rm -rf .git
+          # Prepend YAML front matter to README.md
+          echo "---" > temp_readme.md
+          echo "title: Open WebUI" >> temp_readme.md
+          echo "emoji: 🐳" >> temp_readme.md
+          echo "colorFrom: purple" >> temp_readme.md
+          echo "colorTo: gray" >> temp_readme.md
+          echo "sdk: docker" >> temp_readme.md
+          echo "app_port: 8080" >> temp_readme.md
+          echo "---" >> temp_readme.md
+          cat README.md >> temp_readme.md
+          mv temp_readme.md README.md
+          # Configure git
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          # Set up Git and push to Space
+          git init --initial-branch=main
+          git lfs track "*.ttf"
+          rm -f demo.gif
+          git add .
+          git commit -m "GitHub deploy: ${{ github.sha }}"
+          git push --force https://xnwh:${HF_TOKEN}@huggingface.co/spaces/xnwh/ow main
