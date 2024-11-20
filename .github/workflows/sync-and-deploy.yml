@@ -79,7 +79,9 @@ jobs:
           git config --global user.name "github-actions[bot]"
           # Set up Git and push to Space
           git init --initial-branch=main
+          git lfs install
           git lfs track "*.ttf"
+          git lfs track "*.jpg"
           rm -f demo.gif
           git add .
           git commit -m "GitHub deploy: ${{ github.sha }}"
